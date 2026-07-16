@@ -1,1 +1,0 @@
-# NGINX Professional Notes
