@@ -1,0 +1,96 @@
+log_path = ENV.get("NGINX_LOG", "/var/log/nginx/access.log")
+max_lines = ARGV.len() > 0 ? ARGV[0].Int() : null
+
+echo("Analyzing Nginx log: $log_path")
+if not log_path.File().exists() {
+    echo("ERROR: Log file not found: $log_path")
+    exit(1)
+}
+
+# Read lines (limit if max_lines provided)
+all_lines = read(log_path).lines()
+lines = if max_lines != null then all_lines.limit(max_lines) else all_lines
+
+# Extract fields: $remote_addr, $time_local, $request, $status, $body_bytes_sent
+ips = []
+urls = []
+status_codes = []
+timestamps = []
+
+lines.each(F(line) {
+    # Simple parsing using regex for combined log format
+    # Example: 192.168.1.1 - - [10/Oct/2023:13:55:36 +0000] "GET /index.html HTTP/1.1" 200 2326
+    m = line.search(/^(\S+) \S+ \S+ \[(.*?)\] "(\S+) (\S+)? \S+" (\d+) (\d+|-) /)
+    if m != null {
+        ip = m[1]
+        timestamp_str = m[2]  # format: 10/Oct/2023:13:55:36 +0000
+        method = m[3]
+        url = m[4] or "/"
+        status = m[5]
+        # body_bytes = m[6]
+
+        ips.push(ip)
+        urls.push(url)
+        status_codes.push(status)
+        timestamps.push(timestamp_str)
+    }
+})
+
+echo("\n=== Nginx Access Log Report ===")
+echo("Total requests processed: ${ips.len()}")
+
+# Top 10 IPs
+if ips.len() > 0 {
+    echo("\n--- Top 10 Client IPs ---")
+    top_ips = ips.counts().sort_values(desc=true).limit(10)
+    top_ips.each(F(ip, count) {
+        echo("  $ip  ->  $count requests")
+    })
+}
+
+# Top 10 URLs
+if urls.len() > 0 {
+    echo("\n--- Top 10 URLs ---")
+    top_urls = urls.counts().sort_values(desc=true).limit(10)
+    top_urls.each(F(url, count) {
+        echo("  $url  ->  $count hits")
+    })
+}
+
+# Status code distribution
+if status_codes.len() > 0 {
+    echo("\n--- Status Code Distribution ---")
+    status_dist = status_codes.counts()
+    status_dist.keys().sort().each(F(code) {
+        echo("  HTTP $code: ${status_dist[code]}")
+    })
+}
+
+# Requests per minute (approximate using timestamps)
+if timestamps.len() > 1 {
+    echo("\n--- Request Rate ---")
+    # Convert timestamps to epoch seconds (simplified)
+    # Using NGS's date parsing (if available) or fallback
+    try {
+        parsed_times = timestamps.map(F(ts) {
+            # Assumes format '10/Oct/2023:13:55:36 +0000'
+            # Use $(date -d ...) for conversion (linux)
+            epoch = $(date -d "${ts}" +%s 2>/dev/null).trim().Int()
+            epoch
+        })
+        # filter out null
+        valid_times = parsed_times.filter(F(t) t != null)
+        if valid_times.len() > 1 {
+            sorted = valid_times.sort()
+            start = sorted[0]
+            end = sorted[-1]
+            duration_min = (end - start) / 60.0
+            if duration_min > 0 {
+                rpm = (valid_times.len() / duration_min).round(1)
+                echo("  Requests per minute: $rpm")
+            }
+        }
+    } catch(e) {
+        echo("  Could not compute request rate (date parsing failed)")
+    }
+}
