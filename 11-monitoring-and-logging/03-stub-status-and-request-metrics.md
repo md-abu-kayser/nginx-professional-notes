@@ -1,0 +1,9 @@
+# Stub Status Module
+
+```nginx
+location /nginx_status {
+    stub_status;
+    allow 127.0.0.1;
+    deny all;
+}
+```
